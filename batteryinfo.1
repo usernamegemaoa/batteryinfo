@@ -1,0 +1,214 @@
+'\" t
+.\"     Description: batteryinfo man page
+.\"          Author: Joe Glancy
+.\"        Language: English
+.\"  Source version: 1.0.0
+.\"
+.\" This file is part of batteryinfo.
+.\" Copyright (c) 2016 Joe Glancy
+.\"
+.\" This program is free software: you can redistribute it and/or modify
+.\" it under the terms of the GNU General Public License as published by
+.\" the Free Software Foundation, either version 3 of the License, or
+.\" (at your option) any later version.
+.\"
+.\" This program is distributed in the hope that it will be useful,
+.\" but WITHOUT ANY WARRANTY; without even the implied warranty of
+.\" MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+.\" GNU General Public License for more details.
+.\"
+.\" You should have received a copy of the GNU General Public License
+.\" along with this program.  If not, see <http://www.gnu.org/licenses/>.
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.ad 1
+
+.TH "BATTERYINFO" "1" "2016-08-05" "batteryinfo v1.0.0" "batteryinfo"
+
+.SH "NAME"
+batteryinfo - quickly and simply get information about installed batteries
+
+.SH "SYNOPSIS"
+\fBbatteryinfo\fR <output order>
+[-h | --help]
+[-v | --version]
+[-l | --license]
+[-d | --digits]
+[-n | --name <battery name>]
+[-j | --json]
+
+.SH "DESCRIPTION"
+\fBbatteryinfo\fR can be used to monitor battery status (such as charge,
+voltage, current, etc), and to extract other information from the system such
+as battery model and manufacturer\&.
+
+.SH "OPTIONS"
+\fB`<output order>'\fR is a sequence of characters which determines what
+information is listed about available batteries\&. The order in which it is
+displayed in will be determined by the order in which the characters are given\&.
+
+The following characters are available:
+
+
+.RS 4
+n       battery name
+
+c       current charge, in %
+
+t       total (maximum) possible capacity (full charge / designed full charge), in %
+
+v       current voltage, in V
+
+C       current current, in A
+
+T       current temperature, in deg\&. C
+
+m       battery model
+
+M       battery manufacturer
+
+e       battery technology
+
+s       current battery status
+
+h       battery health
+
+H       battery charge type
+
+r       battery charge rate
+
+p       whether the battery is present or not
+
+o       whether the battery is online or not
+
+g       whether charging is enabled for this battery or not
+.RE
+
+.PP
+\fB-h, --help\fR
+.RS 4
+Display program usage information\&.
+.RE
+.PP
+\fB-v, --version\fR
+.RS 4
+Display the program version\&.
+.RE
+.PP
+\fB-l, --license\fR
+.RS 4
+Display the program's copyright and licensing information\&.
+.RE
+.PP
+\fB-d, --digits\fR
+.RS 4
+Instead of using \fByes\fR and \fBno\fR for flags (such as whether a battery
+is present or not), use the digits \fB1\fR and \fB0\fR\&.
+.RE
+.PP
+\fB-n, --name\fR \fIbattery name\fR
+.RS 4
+Instead of listing information for all available batteries, only list information
+for the one at \fI/sys/class/power_supply/<battery name>\fR\&.
+.RE
+.PP
+\fB-j, --json\fR
+.RS 4
+Output the information in JSON format\&.
+.RE
+
+.SH "NORMAL OUTPUT FORMAT"
+Normal output is in CSV format, i\&.e:
+.RS 4
+<parameter>: <value>
+.RE
+
+If the sequence of characters specifying the output is not provided, it will
+default to:
+
+.RS 4
+\fBncvCmMesp\fR
+.RE
+
+If there is no data available for one of the above mentioned parameters, a
+question mark ("?") is outputted instead\&.
+
+When outputted, each entry per battery found starts with the line:
+
+.RS 4
+\fIbattery:                      n\fR
+.RE
+
+Where \fBn\fR is a number representing that battery\&. The numbers start at
+0, and increment upwards\&. You should not associate a number with a specific
+battery - they are liable to change as they are assigned in the order which
+the directory entries for each battery are found\&. These entries, being
+located in a virtual filesystem (\fI/sys\fR), are not static and so could
+potentially change order between reboots\&.
+
+If the \fB-n\fR option is specified, and a battery name is given, the battery
+number line is still present (in this case, the battery number will be 0)\&.
+
+.SH "JSON OUTPUT FORMAT"
+When the \fB-j\fR option is specified, output from the program is formatted
+in JavaScript Object Notation (JSON) format\&.
+
+NOTE: Instead of using "?" to represent unknown values, \fBnull\fP is used when
+the output format is JSON\&.
+
+.SH "EXAMPLES"
+
+Get information for the battery that goes by the name BAT1:
+.RS 4
+batteryinfo -n BAT1
+.RE
+
+Get a count of how many batteries are present in the system:
+.RS 4
+batteryinfo | grep "battery:" | wc -l
+.RE
+
+The above example, but in a more compact form:
+.RS 4
+batteryinfo "" | wc -l
+.RE
+
+Get the name and temperature of each installed battery:
+.RS 4
+batteryinfo nT
+.RE
+
+.SH "SOURCE CODE"
+Source code for \fBbatteryinfo\fR is available at \fIhttps://github.com/JoeGlancy/batteryinfo\fR\&.
+
+.SH "AUTHORS"
+Joe Glancy (@c0d3st0rm)
+
+.SH "LICENSE"
+\fBbatteryinfo\fR is licensed under the GNU GPL version 3.
+
+.RS 3
+ Copyright (c) 2016 Joe Glancy
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+.SH "BUG REPORTS"
+Bug reports should be reported by opening a GitHub issue at \fIhttps://github.com/JoeGlancy/batteryinfo/issues\fR\&.
+
+If you've got a fix, submit a PR at \fIhttps://github.com/JoeGlancy/batteryinfo/pulls\fR\&.
+
+.SH "NOTES"
+Not all systems provide the same level of detail about installed batteries\&.
+Don't expect \fBbatteryinfo\fR to be able to give you every piece of
+information which it offers - it can only give what your system proivdes\&.
