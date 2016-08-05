@@ -1,8 +1,9 @@
 CC=gcc
 CFLAGS=-O3 -Wall
 EXEC_NAME=batteryinfo
-EXEC_DEST=/usr/local/bin
-MANPAGE_DEST=/usr/local/share/man
+DESTDIR=/usr/local
+EXEC_DEST=$(DESTDIR)/bin
+MANPAGE_DEST=$(DESTDIR)/share/man
 SHELL=/bin/bash
 
 $(EXEC_NAME): batteryinfo.c
