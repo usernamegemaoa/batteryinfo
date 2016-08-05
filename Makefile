@@ -15,9 +15,9 @@ batteryinfo.1.gz: batteryinfo.1
 .PHONY: installdocs clean install uninstall
 
 installdocs: batteryinfo.1.gz
-	@mkdir -p $(MANPAGE_DEST)
-	@install -vm644 batteryinfo.1.gz $(MANPAGE_DEST)/man1
-	@chmod +x $(MANPAGE_DEST)/man1
+	@mkdir -p $(MANPAGE_DEST)/man1
+	@cp batteryinfo.1.gz $(MANPAGE_DEST)/man1/batteryinfo.1.gz
+	@chmod 655 $(MANPAGE_DEST)/man1/batteryinfo.1.gz
 	@mandb
 
 clean:
@@ -25,7 +25,8 @@ clean:
 
 install: $(EXEC_NAME) installdocs
 	@mkdir -p $(EXEC_DEST)
-	@install -vsDm755 $(EXEC_NAME) $(EXEC_DEST)
+	@cp $(EXEC_NAME) $(EXEC_DEST)/$(EXEC_NAME)
+	@chmod 755 $(EXEC_DEST)/$(EXEC_NAME)
 
 uninstall:
 	@rm -v $(EXEC_DEST)/$(EXEC_NAME) $(MANPAGE_DEST)/man1/batteryinfo.1.gz
