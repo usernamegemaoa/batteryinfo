@@ -50,15 +50,17 @@
 #include <unistd.h>
 
 #define PROGRAM_NAME                            "batteryinfo" ///< Program name.
-#define PROGRAM_VERSION_STR                     "1.0.0" ///< Program version string.
+#define PROGRAM_VERSION_STR                     "1.1.0" ///< Program version string.
 
 #define SYS_FS_BATTERY_BASE_PATH                "/sys/class/power_supply/"
 #define SYS_FS_BATTERY_BASE_PATH_LEN            sizeof(SYS_FS_BATTERY_BASE_PATH)
 
-#define DEFAULT_OUTPUT_SEQUENCE                 "ncvCmMesp" ///< The default output sequence for battery information.
+#define DEFAULT_OUTPUT_SEQUENCE                 "ncvCmMedsp" ///< The default output sequence for battery information.
+#define COMPLETE_OUTPUT_SEQUENCE                "nctvCTdmMeshHrpog" ///< The complete output sequence for all battery information.
 
 #define CONFIG_FLAG_DIGITS                      0x00001 ///< Digit output for flags (1/0 instead of yes/no, or true/false in JSON's case) config flag.
 #define CONFIG_FLAG_BY_NAME                     0x00002 ///< Output info for named battery config flag.
+#define CONFIG_FLAG_OUTPUT_ALL                  0x00004 ///< Output every possible piece of information.
 
 #define DOUBLE_INVALID                          DBL_MIN  ///< Invalid double value. Assume that this will never be read as an actual value, so that it can represent an invalid one.
 #define LONG_INVALID                            LONG_MIN ///< Invalid long value.  Assume that this will also never be read as an actual value, so that it can represent an invalid one.
@@ -67,18 +69,18 @@
 
 /** Short usage information string. */
 static const char short_usage_str[] =
-        "Usage: "PROGRAM_NAME" <output order>\n"
+        "Usage: "PROGRAM_NAME" <output sequence>\n"
         "           [-h | --help] [-v | --version] [-l | --license]\n"
-        "           [-d | --digits] [-n | --name <name>] [-j | --json]\n"
+        "           [-a | --all] [-d | --digits] [-n | --name <name>] [-j | --json]\n"
         "Use `"PROGRAM_NAME" -h' for more information.\n";
 
 /** Longer, more extensive usage information string. */
 static const char usage_str[] =
-        "Usage: "PROGRAM_NAME" <output order>\n"
+        "Usage: "PROGRAM_NAME" <output sequence>\n"
         "           [-h | --help] [-v | --version] [-l | --license]\n"
-        "           [-d | --digits] [-n | --name <name>] [-j | --json]\n"
+        "           [-a | --all] [-d | --digits] [-n | --name <name>] [-j | --json]\n"
         "\n"
-        "`output order' is a sequence of the below characters, in any order, which\n"
+        "`output sequence' is a sequence of the below characters, in any order, which\n"
         "determines what information is listed about available batteries.\n"
         "The order in which they are displayed in will be the order in which the\n"
         "characters are given in the argument.\n"
@@ -89,6 +91,7 @@ static const char usage_str[] =
         "    v           current voltage, in V\n"
         "    C           current current, in A\n"
         "    T           current temperature, in deg. C\n"
+        "    d           battery driver\n"
         "    m           battery model\n"
         "    M           battery manufacturer\n"
         "    e           battery technology\n"
@@ -99,7 +102,7 @@ static const char usage_str[] =
         "    p           whether the battery is present or not\n"
         "    o           whether the battery is online or not\n"
         "    g           whether charging is enabled for this battery or not\n"
-        "If the output order is not provided, it will default to:\n"
+        "If the output sequence is not provided, it will default to:\n"
         "        "DEFAULT_OUTPUT_SEQUENCE"\n"
         "If there is no data available for one of the above mentioned parameters, a\n"
         "question mark (\"?\") is outputted instead, if the output format is CSV. If\n"
@@ -109,7 +112,10 @@ static const char usage_str[] =
         "Options:\n"
         "   -h,--help         display this help text.\n"
         "   -v,--version      display the program's version.\n"
-        "   -l,--license      display this program's copyright and licensing information.\n"
+        "   -l,--license      display this program's copyright and licensing\n"
+        "                     information.\n"
+        "   -a,--all          display every possible piece of data (i.e: essentially\n"
+        "                     filling `output sequence' with every valid character).\n"
         "   -d,--digits       instead of outputting \"yes\" and \"no\" (or \"true\" and\n"
         "                     \"false\" for JSON output) for flags, use \"1\" and \"0\".\n"
         "   -n,--name <name>  specify the name of a battery to output information for.\n"
@@ -149,6 +155,7 @@ static const struct option long_command_line_opts[] = {
         { "help", no_argument, NULL, 'h' },
         { "version", no_argument, NULL, 'v' },
         { "license", no_argument, NULL, 'l' },
+        { "all", no_argument, NULL, 'a' },
         { "digits", no_argument, NULL, 'd' },
         { "json", no_argument, NULL, 'j' },
         { "name", required_argument, NULL, 'n' },
@@ -176,6 +183,7 @@ struct battery_info {
         char *model;           ///< Battery model.
         char *manufacturer;    ///< Battery manufacturer.
         char *technology;      ///< Battery technology.
+        char *driver;          ///< Battery driver.
         char *status;          ///< Current battery status.
         char *health;          ///< Current battery health.
         char *charge_type;     ///< Battery charge type.
@@ -215,6 +223,7 @@ static void battery_info_init(struct battery_info *info)
         info->health = NULL;
         info->charge_type = NULL;
         info->charge_rate = NULL;
+        info->driver = NULL;
 
         info->present = -1;
         info->online = -1;
@@ -230,6 +239,7 @@ static void battery_info_cleanup(struct battery_info *info)
         free_if_not_null(info->model);
         free_if_not_null(info->manufacturer);
         free_if_not_null(info->technology);
+        free_if_not_null(info->driver);
         free_if_not_null(info->status);
         free_if_not_null(info->health);
         free_if_not_null(info->charge_type);
@@ -515,23 +525,16 @@ static int compare_file_contents(const char *path, const char *comparison)
         return len == 0 ? 0 : -1;
 }
 
-#define if_startswith(s) if (strstr((const char*) buf, s) == (char*) buf)
+#define if_startswith(s) if (strstr((const char*) buf, s) == buf)
 
 /** Routine to read a battery entry's uevent file, and place the parsed data
  * into a battery_info structure.
- * \param path The path to the uevent file.
+ * \param path The path to the battery's directory entry in the sysfs.
  * \param info A pointer to the structure in which to place the parsed data.
- * \return 0 on success, -1 on error.
+ * \return 0 on success, -1 on error (where nothing could be read).
  */
 static int get_battery_info(const char *path, struct battery_info *info)
 {
-        FILE *f = fopen(path, "r");
-        if (f == NULL) {
-                return -1;
-        }
-
-        char buf[256];
-
         long charge_now = LONG_INVALID,
                 charge_full = LONG_INVALID,
                 charge_full_design = LONG_INVALID,
@@ -542,6 +545,17 @@ static int get_battery_info(const char *path, struct battery_info *info)
                 online = LONG_INVALID,
                 present = LONG_INVALID,
                 charging_enabled = LONG_INVALID;
+
+        char buf[256], pathbuf[SYS_FS_BATTERY_BASE_PATH_LEN + 64];
+        strcpy((char*) pathbuf, path);
+        strcat((char*) pathbuf, "/uevent");
+
+        int failed_opens = 0;
+        FILE *f = fopen(pathbuf, "r");
+        if (f == NULL) {
+                failed_opens++;
+                goto read_device_uevent;
+        }
 
         while (fgets(buf, sizeof(buf), f) != NULL) {
                 // strip any whitespace at the end
@@ -562,44 +576,71 @@ static int get_battery_info(const char *path, struct battery_info *info)
                         // some systems provide the capacity field, others don't. if they do, then the
                         // value can be directly used as the battery charge percentage. otherwise, work
                         // it out from the charge_now and charge_full values.
-                        if (strtol_helper((char*) buf + 22, &capacity) < 0) { continue; }
+                        if (strtol_helper(buf + 22, &capacity) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_NOW") {
-                        if (strtol_helper((char*) buf + 24, &charge_now) < 0) { continue; }
+                        if (strtol_helper(buf + 24, &charge_now) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_FULL_DESIGN") {
                         // check for this one first, otherwise POWER_SUPPLY_CHARGE_FULL will be matched
-                        if (strtol_helper((char*) buf + 32, &charge_full_design) < 0) { continue; }
+                        if (strtol_helper(buf + 32, &charge_full_design) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_FULL") {
-                        if (strtol_helper((char*) buf + 25, &charge_full) < 0) { continue; }
+                        if (strtol_helper(buf + 25, &charge_full) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_VOLTAGE_NOW") {
-                        if (strtol_helper((char*) buf + 25, &voltage_now) < 0) { continue; }
+                        if (strtol_helper(buf + 25, &voltage_now) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CURRENT_NOW") {
-                        if (strtol_helper((char*) buf + 25, &current_now) < 0) { continue; }
+                        if (strtol_helper(buf + 25, &current_now) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_TEMP") {
-                        if (strtol_helper((char*) buf + 18, &temp) < 0) { continue; }
+                        if (strtol_helper(buf + 18, &temp) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_NAME") {
-                        if (strcpy_helper((char*) buf + 18, &info->name) < 0) { continue; }
+                        if (strcpy_helper(buf + 18, &info->name) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_MODEL_NAME") {
-                        if (strcpy_helper((char*) buf + 24, &info->model) < 0) { continue; }
+                        if (strcpy_helper(buf + 24, &info->model) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_MANUFACTURER") {
-                        if (strcpy_helper((char*) buf + 26, &info->manufacturer) < 0) { continue; }
+                        if (strcpy_helper(buf + 26, &info->manufacturer) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_TECHNOLOGY") {
-                        if (strcpy_helper((char*) buf + 24, &info->technology) < 0) { continue; }
+                        if (strcpy_helper(buf + 24, &info->technology) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_STATUS") {
-                        if (strcpy_helper((char*) buf + 20, &info->status) < 0) { continue; }
+                        if (strcpy_helper(buf + 20, &info->status) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_HEALTH") {
-                        if (strcpy_helper((char*) buf + 20, &info->health) < 0) { continue; }
+                        if (strcpy_helper(buf + 20, &info->health) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_TYPE") {
-                        if (strcpy_helper((char*) buf + 25, &info->charge_type) < 0) { continue; }
+                        if (strcpy_helper(buf + 25, &info->charge_type) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_RATE") {
-                        if(strcpy_helper((char*) buf + 25, &info->charge_rate) < 0) { continue; }
+                        if(strcpy_helper(buf + 25, &info->charge_rate) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_PRESENT") {
-                        if (strtol_helper((char*) buf + 21, &present) < 0) { continue; }
+                        if (strtol_helper(buf + 21, &present) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_ONLINE") {
-                        if (strtol_helper((char*) buf + 21, &online) < 0) { continue; }
+                        if (strtol_helper(buf + 21, &online) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGING_ENABLED") {
-                        if (strtol_helper((char*) buf + 30, &charging_enabled) < 0) { continue; }
+                        if (strtol_helper(buf + 30, &charging_enabled) < 0) { continue; }
                 }
         }
+
+        fclose(f);
+
+read_device_uevent:
+        strcpy((char*) pathbuf, path);
+        strcat((char*) pathbuf, "/device/uevent");
+        if ((f = fopen(pathbuf, "r")) == NULL) {
+                failed_opens++;
+                goto end;
+        }
+
+        while (fgets(buf, sizeof(buf), f) != NULL) {
+                size_t i = strlen((const char*) buf) - 1;
+                while (i > 0 && isspace((int) buf[i])) i--;
+
+                if (i == 0) {
+                        continue;
+                }
+
+                buf[i + 1] = '\0';
+
+                if_startswith("DRIVER") {
+                        if (strcpy_helper(buf + 7, &info->driver) < 0) { continue; }
+                }
+        }
+
+        fclose(f);
 
         if (capacity != LONG_INVALID && capacity >= 0 && capacity <= 100) {
                 info->charge = (double) capacity;
@@ -636,7 +677,8 @@ static int get_battery_info(const char *path, struct battery_info *info)
                 info->charging_enabled = (char) charging_enabled;
         }
 
-        return 0;
+end:
+        return failed_opens >= 2 ? -1 : 0; // if we manage to read at least something, count it as a success.
 }
 
 #undef if_startswith
@@ -664,6 +706,10 @@ static int list_battery_info(int battery, const char *path, char *infostr, struc
 
         char *p = infostr;
 
+        if (config->configflags & CONFIG_FLAG_OUTPUT_ALL) {
+                p = COMPLETE_OUTPUT_SEQUENCE;
+        }
+
         while (*p != '\0') {
                 switch((int) *p) {
                         case 'n': {
@@ -688,6 +734,10 @@ static int list_battery_info(int battery, const char *path, char *infostr, struc
                         }
                         case 'T': {
                                 battery_info_output_double(info.temperature, "temperature:", config);
+                                break;
+                        }
+                        case 'd': {
+                                battery_info_output_str(info.driver, "driver:", config);
                                 break;
                         }
                         case 'm': {
@@ -742,10 +792,9 @@ static int list_battery_info(int battery, const char *path, char *infostr, struc
         return 0;
 }
 
-#define set_path_from_dir(filename) do { \
+#define set_path_to_dir() do { \
                 strcpy(path, sys_fs_path); \
                 strcat(path, (const char*) dir->d_name); \
-                strcat(path, "/"filename); \
         } while (0)
 
 /** Routine which goes through each entry in /sys/class/power_supply, checks
@@ -776,7 +825,8 @@ static void list_all_battery_info(char *infostr, struct config *config)
                 }
 
                 // is this a battery path?
-                set_path_from_dir("type");
+                set_path_to_dir();
+                strcat(path, "/type");
 
                 if (!compare_file_contents((const char*) path, "Battery")) {
                         // found a battery. was a specific battery name provided?
@@ -784,14 +834,15 @@ static void list_all_battery_info(char *infostr, struct config *config)
                                 // does this name match?
                                 if (!strcmp((const char*) dir->d_name, (const char*) config->cmdopts.n)) {
                                         // yes
-                                        set_path_from_dir("uevent");
+                                        set_path_to_dir();
                                         list_battery_info(0, path, infostr, config);
                                         break;
                                 } else {
                                         continue; // no
                                 }
                         }
-                        set_path_from_dir("uevent");
+
+                        set_path_to_dir();
                         list_battery_info(battery, path, infostr, config);
 
                         battery++;
@@ -862,7 +913,7 @@ int main(int argc, char **argv)
                 // parse arguments
                 int c;
                 char *infoflagstr = NULL;
-                while ((c = getopt_long(argc, argv, "-hvldn:j", (const struct option*) long_command_line_opts, NULL)) != -1) {
+                while ((c = getopt_long(argc, argv, "-hvladn:j", (const struct option*) long_command_line_opts, NULL)) != -1) {
                         switch (c) {
                                 case 'h':
                                         usage(EXIT_SUCCESS);
@@ -870,6 +921,10 @@ int main(int argc, char **argv)
                                         version();
                                 case 'l':
                                         license();
+                                case 'a': {
+                                        config.configflags |= CONFIG_FLAG_OUTPUT_ALL;
+                                        break;
+                                }
                                 case 'd': {
                                         config.configflags |= CONFIG_FLAG_DIGITS;
                                         break;
@@ -901,16 +956,20 @@ int main(int argc, char **argv)
                         }
                 }
 
-                if (infoflagstr != NULL) {
+                if (infoflagstr != NULL && !(config.configflags & CONFIG_FLAG_OUTPUT_ALL)) {
+                        // if CONFIG_FLAG_OUTPUT_ALL is set, it overwrites
+                        // whatever the user specifies for the output sequence,
+                        // so skip checking it if it was provided.
                         char *p = infoflagstr;
                         while (*p != '\0') {
                                 switch ((int) *p) {
+                                        case 'n':
                                         case 'c':
                                         case 't':
                                         case 'v':
                                         case 'C':
                                         case 'T':
-                                        case 'n':
+                                        case 'd':
                                         case 'm':
                                         case 'M':
                                         case 'e':
