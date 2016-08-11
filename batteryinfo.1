@@ -2,7 +2,7 @@
 .\"     Description: batteryinfo man page
 .\"          Author: Joe Glancy
 .\"        Language: English
-.\"  Source version: 1.1.0
+.\"  Source version: 1.2.0
 .\"
 .\" This file is part of batteryinfo.
 .\" Copyright (c) 2016 Joe Glancy
@@ -23,7 +23,7 @@
 .el .ds Aq '
 .ad 1
 
-.TH "BATTERYINFO" "1" "2016-08-07" "batteryinfo v1.1.0" "batteryinfo"
+.TH "BATTERYINFO" "1" "2016-08-11" "batteryinfo v1.2.0" "batteryinfo"
 
 .SH "NAME"
 batteryinfo - quickly and simply get information about installed batteries
@@ -54,7 +54,7 @@ The following characters are available:
 .RS 3
  n       battery name
  c       current charge, in %
- t       total (maximum) possible capacity (full charge / designed full charge), in %
+ t       the maximum capacity of charge which the battery can hold (in %), relative to what it was designed to hold.
  v       current voltage, in V
  C       current current, in A
  T       current temperature, in deg\&. C
@@ -69,7 +69,19 @@ The following characters are available:
  p       whether the battery is present or not
  o       whether the battery is online or not
  g       whether charging is enabled for this battery or not
+ D       estimated remaining battery life, in hours.
 RE
+
+NOTES:
+.RS 4
+`current charge' (\fBc\fR) shows how much of your maximum possible charge
+remains, on a range of 0-100%. This means that it can be larger that the
+`maximum capacity of charge'.
+.RE
+.RS 4
+`remaining battery life' (\fBD\fR) assumes that the current battery drain will
+remain constant.
+.RE
 
 .PP
 \fB-h, --help\fR

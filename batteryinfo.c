@@ -49,34 +49,56 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+// comment the line below if you don't want color output
+#define COLOR_OUTPUT                    1
+
+#ifdef COLOR_OUTPUT
+#       define FMT_RESET                "\033[0m"
+#       define FMT_RED                  "\033[1;31m"
+#       define FMT_GREEN                "\033[1;32m"
+#       define FMT_YELLOW               "\033[1;33m"
+#else
+#       define FMT_RESET
+#       define FMT_RED
+#       define FMT_GREEN
+#       define FMT_YELLOW
+#endif
+
 #define PROGRAM_NAME                            "batteryinfo" ///< Program name.
-#define PROGRAM_VERSION_STR                     "1.1.0" ///< Program version string.
+#define PROGRAM_VERSION_STR                     "1.2.0" ///< Program version string.
 
 #define SYS_FS_BATTERY_BASE_PATH                "/sys/class/power_supply/"
 #define SYS_FS_BATTERY_BASE_PATH_LEN            sizeof(SYS_FS_BATTERY_BASE_PATH)
 
 #define DEFAULT_OUTPUT_SEQUENCE                 "ncvCmMedsp" ///< The default output sequence for battery information.
-#define COMPLETE_OUTPUT_SEQUENCE                "nctvCTdmMeshHrpog" ///< The complete output sequence for all battery information.
+#define COMPLETE_OUTPUT_SEQUENCE                "nctvCTdmMeshHrpogD" ///< The complete output sequence for all battery information.
 
 #define CONFIG_FLAG_DIGITS                      0x00001 ///< Digit output for flags (1/0 instead of yes/no, or true/false in JSON's case) config flag.
 #define CONFIG_FLAG_BY_NAME                     0x00002 ///< Output info for named battery config flag.
 #define CONFIG_FLAG_OUTPUT_ALL                  0x00004 ///< Output every possible piece of information.
+#define CONFIG_FLAG_DISABLE_CHARGE_CAP          0x00008 ///< Disable the 100% charge capacity cap.
 
 #define DOUBLE_INVALID                          DBL_MIN  ///< Invalid double value. Assume that this will never be read as an actual value, so that it can represent an invalid one.
 #define LONG_INVALID                            LONG_MIN ///< Invalid long value.  Assume that this will also never be read as an actual value, so that it can represent an invalid one.
 
 #define free_if_not_null(p) if (p != NULL) free((void*) p) ///< Macro to free the memory address pointed to by p if it's value is not NULL.
 
+#define error(a, b...) fprintf(stderr, FMT_RED "error" FMT_RESET ": " a, ##b)
+
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
+
 /** Short usage information string. */
 static const char short_usage_str[] =
-        "Usage: "PROGRAM_NAME" <output sequence>\n"
+        "Usage: " PROGRAM_NAME " <output sequence>\n"
         "           [-h | --help] [-v | --version] [-l | --license]\n"
         "           [-a | --all] [-d | --digits] [-n | --name <name>] [-j | --json]\n"
-        "Use `"PROGRAM_NAME" -h' for more information.\n";
+        "Use `" PROGRAM_NAME " -h' for more information.\n";
 
 /** Longer, more extensive usage information string. */
 static const char usage_str[] =
-        "Usage: "PROGRAM_NAME" <output sequence>\n"
+        "Usage: " PROGRAM_NAME " <output sequence>\n"
         "           [-h | --help] [-v | --version] [-l | --license]\n"
         "           [-a | --all] [-d | --digits] [-n | --name <name>] [-j | --json]\n"
         "\n"
@@ -86,8 +108,9 @@ static const char usage_str[] =
         "characters are given in the argument.\n"
         "    n           battery name\n"
         "    c           current charge, in %\n" // single %s are fine as we're using fputs, not fprintf
-        "    t           total (maximum) possible capacity (full charge / designed full\n"
-        "                charge), in %\n"
+        "    t           the maximum capacity of charge which the battery\n"
+        "                can hold (in %), relative to what it was designed\n"
+        "                to hold.\n"
         "    v           current voltage, in V\n"
         "    C           current current, in A\n"
         "    T           current temperature, in deg. C\n"
@@ -102,8 +125,12 @@ static const char usage_str[] =
         "    p           whether the battery is present or not\n"
         "    o           whether the battery is online or not\n"
         "    g           whether charging is enabled for this battery or not\n"
+        "    D           estimated time until the battery is completely\n"
+        "                discharged (remaining battery life), in hours.\n"
+        "                This assumes that the current battery drain will\n"
+        "                remain constant.\n"
         "If the output sequence is not provided, it will default to:\n"
-        "        "DEFAULT_OUTPUT_SEQUENCE"\n"
+        "        " DEFAULT_OUTPUT_SEQUENCE "\n"
         "If there is no data available for one of the above mentioned parameters, a\n"
         "question mark (\"?\") is outputted instead, if the output format is CSV. If\n"
         "the output format is JSON, a null value will be used to indicate the absence\n"
@@ -121,7 +148,7 @@ static const char usage_str[] =
         "   -n,--name <name>  specify the name of a battery to output information for.\n"
         "                     If no battery by that name is found, the output will be\n"
         "                     empty (unless the output format is in JSON, in which case\n"
-        "                     the batteries array will be empty).\n"
+        "                     the `batteries' array will be empty).\n"
         "   -j,--json         output battery information in JSON format.\n";
 
 /** License string. */
@@ -159,8 +186,13 @@ static const struct option long_command_line_opts[] = {
         { "digits", no_argument, NULL, 'd' },
         { "json", no_argument, NULL, 'j' },
         { "name", required_argument, NULL, 'n' },
+        { "no-cap", no_argument, NULL, 'N'},
         { NULL, 0, NULL, 0 }
 };
+
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
 
 /** Structure to hold various program configuration parameters. */
 struct config {
@@ -178,6 +210,7 @@ struct battery_info {
         double voltage;        ///< Current battery voltage.
         double current;        ///< Current battery current.
         double temperature;    ///< Current battery temperature.
+        double etd;            ///< Estimated Time until Discharge, i.e: the (estimated) amount of time left until the battery is completely discharged.
 
         char *name;            ///< Battery name (as per what the system gave it).
         char *model;           ///< Battery model.
@@ -194,6 +227,10 @@ struct battery_info {
         char charging_enabled; ///< Does the battery have charging enabled?
 };
 
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
+
 /** Routine to initialize a config structure with blank values.
  * \param config A pointer to the structure to initialize.
  */
@@ -207,13 +244,15 @@ static void config_init(struct config *config)
 /** Routine to initialize a battery_info structure with blank values.
  * \param info A pointer to the structure to initialize.
  */
-static void battery_info_init(struct battery_info *info)
+static void
+battery_info_init(struct battery_info *info)
 {
         info->charge = DOUBLE_INVALID;
         info->max_charge = DOUBLE_INVALID;
         info->voltage = DOUBLE_INVALID;
         info->current = DOUBLE_INVALID;
         info->temperature = DOUBLE_INVALID;
+        info->etd = DOUBLE_INVALID;
 
         info->name = NULL;
         info->model = NULL;
@@ -233,7 +272,8 @@ static void battery_info_init(struct battery_info *info)
 /** Routine to clean up a battery_info structure by freeing any allocated memory.
  * \param info A pointer to the structure to clean up.
  */
-static void battery_info_cleanup(struct battery_info *info)
+static void
+battery_info_cleanup(struct battery_info *info)
 {
         free_if_not_null(info->name);
         free_if_not_null(info->model);
@@ -246,10 +286,15 @@ static void battery_info_cleanup(struct battery_info *info)
         free_if_not_null(info->charge_rate);
 }
 
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
+
 /** Output routine for the beginning of outputting all battery information.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_init(struct config *config)
+static void
+battery_info_output_init(struct config *config)
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
@@ -267,7 +312,8 @@ static void battery_info_output_init(struct config *config)
 /** Output routine for the end of outputting all battery information.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_deinit(struct config *config)
+static void
+battery_info_output_deinit(struct config *config)
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
@@ -287,7 +333,9 @@ static void battery_info_output_deinit(struct config *config)
  * \param battery The current battery.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_start(int battery, struct config *config)
+static void
+battery_info_output_start(int battery,
+                          struct config *config)
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
@@ -306,7 +354,8 @@ static void battery_info_output_start(int battery, struct config *config)
 /** Output routine for the end of outputting invividual battery information.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_end(struct config *config)
+static void
+battery_info_output_end(struct config *config)
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
@@ -326,7 +375,10 @@ static void battery_info_output_end(struct config *config)
  * \param name The value's identifiable name.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_double(double d, const char *name, struct config *config)
+static void
+battery_info_output_double(double d,
+                           const char *name,
+                           struct config *config)
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
@@ -340,7 +392,7 @@ static void battery_info_output_double(double d, const char *name, struct config
                 case OUTPUT_FORMAT_JSON: {
                         printf(",\n\t\t\"%s\": ", name);
                         if (d != DOUBLE_INVALID) {
-                                printf("%f", d);
+                                printf("%.2f", d);
                         } else {
                                 fputs("null", stdout);
                         }
@@ -357,7 +409,10 @@ static void battery_info_output_double(double d, const char *name, struct config
  * \param name The value's identifiable name.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_double_percent(double d, const char *name, struct config *config)
+static void
+battery_info_output_double_percent(double d,
+                                   const char *name,
+                                   struct config *config)
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
@@ -373,7 +428,7 @@ static void battery_info_output_double_percent(double d, const char *name, struc
                         // we don't want % signs in the JSON
                         printf(",\n\t\t\"%s\": ", name);
                         if (d != DOUBLE_INVALID) {
-                                printf("%f", d);
+                                printf("%.2f", d);
                         } else {
                                 fputs("null", stdout);
                         }
@@ -389,25 +444,28 @@ static void battery_info_output_double_percent(double d, const char *name, struc
  * \param name The string's identifiable name.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_str(const char *s, const char *name, struct config *config)
+static void
+battery_info_output_str(const char *s,
+                        const char *name,
+                        struct config *config)
 {
-                switch (config->output_format) {
-                        case OUTPUT_FORMAT_CSV: {
-                                printf("%-30s%s\n", name, s == NULL ? "?" : s);
-                                break;
-                        }
-                        case OUTPUT_FORMAT_JSON: {
-                                printf(",\n\t\t\"%s\": ", name);
-                                if (s == NULL) {
-                                        fputs("null", stdout);
-                                } else {
-                                        printf("\"%s\"", s);
-                                }
-                                break;
-                        }
-                        default:
-                                break;
+        switch (config->output_format) {
+                case OUTPUT_FORMAT_CSV: {
+                        printf("%-30s%s\n", name, s == NULL ? "?" : s);
+                        break;
                 }
+                case OUTPUT_FORMAT_JSON: {
+                        printf(",\n\t\t\"%s\": ", name);
+                        if (s == NULL) {
+                                fputs("null", stdout);
+                        } else {
+                                printf("\"%s\"", s);
+                        }
+                        break;
+                }
+                default:
+                        break;
+        }
 }
 
 /** Output routine for outputting a true/false flag in the correct format.
@@ -415,52 +473,61 @@ static void battery_info_output_str(const char *s, const char *name, struct conf
  * \param name The flag value's identifiable name.
  * \param config A pointer to the program configuration struct.
  */
-static void battery_info_output_flag(int flag, const char *name, struct config *config)
+static void
+battery_info_output_flag(int flag,
+                         const char *name,
+                         struct config *config)
 {
-                switch (config->output_format) {
-                        case OUTPUT_FORMAT_CSV: {
-                                printf("%-30s", name);
-                                if (config->configflags & CONFIG_FLAG_DIGITS) {
-                                        printf("%s\n", flag == 1 ? "1" :
-                                                                flag == 0 ? "0" : "?");
-                                } else {
-                                        printf("%s\n", flag == 1 ? "yes" :
-                                                                flag == 0 ? "no" : "?");
-                                }
-                                break;
+        switch (config->output_format) {
+                case OUTPUT_FORMAT_CSV: {
+                        printf("%-30s", name);
+                        if (config->configflags & CONFIG_FLAG_DIGITS) {
+                                printf("%s\n", flag == 1 ? "1" :
+                                                        flag == 0 ? "0" : "?");
+                        } else {
+                                printf("%s\n", flag == 1 ? "yes" :
+                                                        flag == 0 ? "no" : "?");
                         }
-                        case OUTPUT_FORMAT_JSON: {
-                                printf(",\n\t\t\"%s\": ", name);
-                                if (config->configflags & CONFIG_FLAG_DIGITS) {
-                                        if (flag == 0) {
-                                                fputc('0', stdout);
-                                        } else if (flag == 1) {
-                                                fputc('1', stdout);
-                                        } else {
-                                                fputs("null", stdout);
-                                        }
-                                } else {
-                                        if (flag == 0) {
-                                                fputs("false", stdout);
-                                        } else if (flag == 1) {
-                                                fputs("true", stdout);
-                                        } else {
-                                                fputs("null", stdout);
-                                        }
-                                }
-                                break;
-                        }
-                        default:
-                                break;
+                        break;
                 }
+                case OUTPUT_FORMAT_JSON: {
+                        printf(",\n\t\t\"%s\": ", name);
+                        if (config->configflags & CONFIG_FLAG_DIGITS) {
+                                if (flag == 0) {
+                                        fputc('0', stdout);
+                                } else if (flag == 1) {
+                                        fputc('1', stdout);
+                                } else {
+                                        fputs("null", stdout);
+                                }
+                        } else {
+                                if (flag == 0) {
+                                        fputs("false", stdout);
+                                } else if (flag == 1) {
+                                        fputs("true", stdout);
+                                } else {
+                                        fputs("null", stdout);
+                                }
+                        }
+                        break;
+                }
+                default:
+                        break;
+        }
 }
+
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
 
 /** Utility routine for converting a string into an integer (strtol wrapper).
  * \param s The string to convert.
  * \param dest A pointer to the long integer to place the result in.
  * \return 0 on success, -1 on error.
  */
-static int strtol_helper(char *s, long *dest)
+static int
+strtol_helper(char *s,
+              long *dest)
 {
         errno = 0;
         char *endptr;
@@ -482,7 +549,9 @@ static int strtol_helper(char *s, long *dest)
  * resulting allocated string.
  * \return 0 on success, -1 on error.
  */
-static int strcpy_helper(char *src, char **dest)
+static int
+strcpy_helper(char *src,
+              char **dest)
 {
         free_if_not_null(*dest);
         *dest = (char*) malloc(strlen((const char*) src) + 1);
@@ -500,7 +569,9 @@ static int strcpy_helper(char *src, char **dest)
  * \return 0 on success, -1 on error or when the file doesn't match the given
  * string.
  */
-static int compare_file_contents(const char *path, const char *comparison)
+static int
+compare_file_contents(const char *path,
+                      const char *comparison)
 {
         FILE *f = fopen(path, "r");
         if (f == NULL) {
@@ -525,26 +596,34 @@ static int compare_file_contents(const char *path, const char *comparison)
         return len == 0 ? 0 : -1;
 }
 
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
+
 #define if_startswith(s) if (strstr((const char*) buf, s) == buf)
 
 /** Routine to read a battery entry's uevent file, and place the parsed data
  * into a battery_info structure.
  * \param path The path to the battery's directory entry in the sysfs.
  * \param info A pointer to the structure in which to place the parsed data.
- * \return 0 on success, -1 on error (where nothing could be read).
+ * \return 0 on success, -1 on error. NOTE:
+
  */
-static int get_battery_info(const char *path, struct battery_info *info)
+static int
+get_battery_info(const char *path,
+                 struct battery_info *info,
+                 struct config *config)
 {
         long charge_now = LONG_INVALID,
-                charge_full = LONG_INVALID,
-                charge_full_design = LONG_INVALID,
-                capacity = LONG_INVALID,
-                voltage_now = LONG_INVALID,
-                current_now = LONG_INVALID,
-                temp = LONG_INVALID,
-                online = LONG_INVALID,
-                present = LONG_INVALID,
-                charging_enabled = LONG_INVALID;
+             charge_full = LONG_INVALID,
+             charge_full_design = LONG_INVALID,
+             capacity = LONG_INVALID,
+             voltage_now = LONG_INVALID,
+             current_now = LONG_INVALID,
+             temp = LONG_INVALID,
+             online = LONG_INVALID,
+             present = LONG_INVALID,
+             charging_enabled = LONG_INVALID;
 
         char buf[256], pathbuf[SYS_FS_BATTERY_BASE_PATH_LEN + 64];
         strcpy((char*) pathbuf, path);
@@ -621,8 +700,11 @@ read_device_uevent:
         strcpy((char*) pathbuf, path);
         strcat((char*) pathbuf, "/device/uevent");
         if ((f = fopen(pathbuf, "r")) == NULL) {
-                failed_opens++;
-                goto end;
+                if (++failed_opens == 2) {
+                        // skip processing anything if we couldn't open anything
+                        goto end;
+                }
+                goto process;
         }
 
         while (fgets(buf, sizeof(buf), f) != NULL) {
@@ -642,17 +724,23 @@ read_device_uevent:
 
         fclose(f);
 
+process:
         if (capacity != LONG_INVALID && capacity >= 0 && capacity <= 100) {
                 info->charge = (double) capacity;
         } else if (charge_now != LONG_INVALID && charge_full != LONG_INVALID) {
                 info->charge = (double) charge_now / (double) charge_full * 100;
         }
 
+        if (!(config->configflags & CONFIG_FLAG_DISABLE_CHARGE_CAP) &&
+                info->charge > 100.0) {
+                info->charge = 100.0;
+        }
+
         if (charge_full != LONG_INVALID && charge_full_design != LONG_INVALID) {
                 info->max_charge = (double) charge_full / (double) charge_full_design * 100;
         }
 
-        // TODO fix: make sure this is right
+        // TODO fix: make sure this is right (the units)
         if (voltage_now != LONG_INVALID) {
                 info->voltage = (double) voltage_now / (double) 1000000.0;
         }
@@ -665,6 +753,11 @@ read_device_uevent:
         // TODO fix: ^
         if (temp != LONG_INVALID) {
                 info->temperature = (double) temp / (double) 10.0;
+        }
+
+        if (charge_full != LONG_INVALID && charge_full != LONG_INVALID &&
+                current_now != LONG_INVALID) {
+                info->etd = (((double) charge_full - (double) charge_now) / (double) current_now) * 10;
         }
 
         if (present == 1 || present == 0) {
@@ -693,12 +786,16 @@ end:
  * parameters.
  * \return 0 on success, -1 on failure.
  */
-static int list_battery_info(int battery, const char *path, char *infostr, struct config *config)
+static int
+list_battery_info(int battery,
+                  const char *path,
+                  char *infostr,
+                  struct config *config)
 {
         struct battery_info info;
         battery_info_init(&info);
 
-        if (get_battery_info(path, &info) < 0) {
+        if (get_battery_info(path, &info, config) < 0) {
                 return -1;
         }
 
@@ -734,6 +831,10 @@ static int list_battery_info(int battery, const char *path, char *infostr, struc
                         }
                         case 'T': {
                                 battery_info_output_double(info.temperature, "temperature:", config);
+                                break;
+                        }
+                        case 'D': {
+                                battery_info_output_double(info.etd, "etd:", config);
                                 break;
                         }
                         case 'd': {
@@ -804,7 +905,9 @@ static int list_battery_info(int battery, const char *path, char *infostr, struc
  * \param configflags A set of flags which denote program-wide configuration
   * parameters.
  */
-static void list_all_battery_info(char *infostr, struct config *config)
+static void
+list_all_battery_info(char *infostr,
+                      struct config *config)
 {
         const char *sys_fs_path = SYS_FS_BATTERY_BASE_PATH;
         DIR *basedir = opendir(sys_fs_path);
@@ -856,11 +959,16 @@ static void list_all_battery_info(char *infostr, struct config *config)
 
 #undef set_path_from_dir
 
+//------------------------------------------------------------------------------
+// _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
+//------------------------------------------------------------------------------
+
 /** Routine which outputs program usage information to stderr, and then exits
  * the program.
  * \param retcode The return code to exit the program with.
  */
-static void usage(int retcode)
+static void
+usage(int retcode)
 {
         fwrite((void*) usage_str, 1, sizeof(usage_str) - 1, stderr);
         exit(retcode);
@@ -870,7 +978,8 @@ static void usage(int retcode)
  * and then exits the program with the specified return code.
  * \param retcode The return code to exit the program with.
  */
-static void usage_short(int retcode)
+static void
+usage_short(int retcode)
 {
         fwrite((void*) short_usage_str, 1, sizeof(short_usage_str) - 1, stderr);
         exit(retcode);
@@ -878,7 +987,8 @@ static void usage_short(int retcode)
 
 /** Routine which outputs the program version to stderr, then exits the program
  * with return code 0. */
-static void version()
+static void
+version()
 {
         fwrite((void*) version_str, 1, sizeof(version_str) - 1, stderr);
         exit(EXIT_SUCCESS);
@@ -890,7 +1000,8 @@ static void version()
  * This is built into the final built binary so that it (the binary) can be
  * freely distributed by itself and still comply with the license.
  */
-static void license()
+static void
+license()
 {
         fwrite((void*) license_str, 1, sizeof(license_str) - 1, stderr);
         exit(EXIT_SUCCESS);
@@ -900,7 +1011,9 @@ static void license()
  * \param argc The amount of command-line arguments.
  * \param argv An array of the command-line arguments.
  */
-int main(int argc, char **argv)
+int
+main(int argc,
+     char **argv)
 {
         opterr = 0;
 
@@ -913,7 +1026,7 @@ int main(int argc, char **argv)
                 // parse arguments
                 int c;
                 char *infoflagstr = NULL;
-                while ((c = getopt_long(argc, argv, "-hvladn:j", (const struct option*) long_command_line_opts, NULL)) != -1) {
+                while ((c = getopt_long(argc, argv, "-hvladjn:N", (const struct option*) long_command_line_opts, NULL)) != -1) {
                         switch (c) {
                                 case 'h':
                                         usage(EXIT_SUCCESS);
@@ -929,6 +1042,10 @@ int main(int argc, char **argv)
                                         config.configflags |= CONFIG_FLAG_DIGITS;
                                         break;
                                 }
+                                case 'j': {
+                                        config.output_format = OUTPUT_FORMAT_JSON;
+                                        break;
+                                }
                                 case 'n': {
                                         if (strlen((const char*) optarg) < 1) {
                                                 fprintf(stderr, "error: battery name must be a non-empty string for argument `-n'.\n");
@@ -938,8 +1055,8 @@ int main(int argc, char **argv)
                                         config.configflags |= CONFIG_FLAG_BY_NAME;
                                         break;
                                 }
-                                case 'j': {
-                                        config.output_format = OUTPUT_FORMAT_JSON;
+                                case 'N': {
+                                        config.configflags |= CONFIG_FLAG_DISABLE_CHARGE_CAP;
                                         break;
                                 }
                                 case '?': {
@@ -969,6 +1086,7 @@ int main(int argc, char **argv)
                                         case 'v':
                                         case 'C':
                                         case 'T':
+                                        case 'D':
                                         case 'd':
                                         case 'm':
                                         case 'M':
