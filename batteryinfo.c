@@ -65,13 +65,13 @@
 #endif
 
 #define PROGRAM_NAME                            "batteryinfo" ///< Program name.
-#define PROGRAM_VERSION_STR                     "1.2.0" ///< Program version string.
+#define PROGRAM_VERSION_STR                     "1.2.1" ///< Program version string.
 
 #define SYS_FS_BATTERY_BASE_PATH                "/sys/class/power_supply/"
 #define SYS_FS_BATTERY_BASE_PATH_LEN            sizeof(SYS_FS_BATTERY_BASE_PATH)
 
 #define DEFAULT_OUTPUT_SEQUENCE                 "ncvCmMedsp" ///< The default output sequence for battery information.
-#define COMPLETE_OUTPUT_SEQUENCE                "nctvCTdmMeshHrpogD" ///< The complete output sequence for all battery information.
+#define COMPLETE_OUTPUT_SEQUENCE                "nctvCTdmMeshSHrpogD" ///< The complete output sequence for all battery information.
 
 #define CONFIG_FLAG_DIGITS                      0x00001 ///< Digit output for flags (1/0 instead of yes/no, or true/false in JSON's case) config flag.
 #define CONFIG_FLAG_BY_NAME                     0x00002 ///< Output info for named battery config flag.
@@ -120,6 +120,7 @@ static const char usage_str[] =
         "    e           battery technology\n"
         "    s           current battery status\n"
         "    h           battery health\n"
+        "    S           battery serial number\n"
         "    H           battery charge type\n"
         "    r           battery charge rate\n"
         "    p           whether the battery is present or not\n"
@@ -177,7 +178,7 @@ enum {
         OUTPUT_FORMAT_JSON
 };
 
-/** Global long-format argument definition structure. */
+/** Long argument definitions for getopt_long. */
 static const struct option long_command_line_opts[] = {
         { "help", no_argument, NULL, 'h' },
         { "version", no_argument, NULL, 'v' },
@@ -219,6 +220,7 @@ struct battery_info {
         char *driver;          ///< Battery driver.
         char *status;          ///< Current battery status.
         char *health;          ///< Current battery health.
+        char *serial_number;   ///< Battery serial number.
         char *charge_type;     ///< Battery charge type.
         char *charge_rate;     ///< Battery charge rate.
 
@@ -260,6 +262,7 @@ battery_info_init(struct battery_info *info)
         info->technology = NULL;
         info->status = NULL;
         info->health = NULL;
+        info->serial_number = NULL;
         info->charge_type = NULL;
         info->charge_rate = NULL;
         info->driver = NULL;
@@ -282,6 +285,7 @@ battery_info_cleanup(struct battery_info *info)
         free_if_not_null(info->driver);
         free_if_not_null(info->status);
         free_if_not_null(info->health);
+        free_if_not_null(info->serial_number);
         free_if_not_null(info->charge_type);
         free_if_not_null(info->charge_rate);
 }
@@ -289,6 +293,16 @@ battery_info_cleanup(struct battery_info *info)
 //------------------------------------------------------------------------------
 // _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
 //------------------------------------------------------------------------------
+
+#define output_n_spaces(n) do { \
+                size_t i = n; \
+                while (i-- > 0) fputc(' ', stdout); \
+        } while (0)
+#define output_csv_name() do { \
+                fputs(name, stdout); \
+                fputc(':', stdout); \
+                output_n_spaces(29 - strlen(name)); \
+        } while (0)
 
 /** Output routine for the beginning of outputting all battery information.
  * \param config A pointer to the program configuration struct.
@@ -382,10 +396,11 @@ battery_info_output_double(double d,
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
+                        output_csv_name();
                         if (d != DOUBLE_INVALID) {
-                                printf("%-30s%.2f\n", name, d);
+                                printf("%.2f\n", d);
                         } else {
-                                printf("%-30s?\n", name);
+                                fputs("?\n", stdout);
                         }
                         break;
                 }
@@ -416,7 +431,7 @@ battery_info_output_double_percent(double d,
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
-                        printf("%-30s", name);
+                        output_csv_name();
                         if (d != DOUBLE_INVALID) {
                                 printf("%.2f%%\n", d);
                         } else {
@@ -451,7 +466,12 @@ battery_info_output_str(const char *s,
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
-                        printf("%-30s%s\n", name, s == NULL ? "?" : s);
+                        output_csv_name();
+                        if (s == NULL) {
+                                fputs("?\n", stdout);
+                        } else {
+                                printf("%s\n", s);
+                        }
                         break;
                 }
                 case OUTPUT_FORMAT_JSON: {
@@ -480,7 +500,7 @@ battery_info_output_flag(int flag,
 {
         switch (config->output_format) {
                 case OUTPUT_FORMAT_CSV: {
-                        printf("%-30s", name);
+                        output_csv_name();
                         if (config->configflags & CONFIG_FLAG_DIGITS) {
                                 printf("%s\n", flag == 1 ? "1" :
                                                         flag == 0 ? "0" : "?");
@@ -515,6 +535,9 @@ battery_info_output_flag(int flag,
                         break;
         }
 }
+
+#undef output_n_spaces
+#undef output_csv_name
 
 //------------------------------------------------------------------------------
 // _,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,__,-*'^'*-,_
@@ -681,6 +704,8 @@ get_battery_info(const char *path,
                         if (strcpy_helper(buf + 20, &info->status) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_HEALTH") {
                         if (strcpy_helper(buf + 20, &info->health) < 0) { continue; }
+                } else if_startswith("POWER_SUPPLY_SERIAL_NUMBER") {
+                        if (strcpy_helper(buf + 27, &info->serial_number) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_TYPE") {
                         if (strcpy_helper(buf + 25, &info->charge_type) < 0) { continue; }
                 } else if_startswith("POWER_SUPPLY_CHARGE_RATE") {
@@ -810,75 +835,79 @@ list_battery_info(int battery,
         while (*p != '\0') {
                 switch((int) *p) {
                         case 'n': {
-                                battery_info_output_str(info.name, "name:", config);
+                                battery_info_output_str(info.name, "name", config);
                                 break;
                         }
                         case 'c': {
-                                battery_info_output_double_percent(info.charge, "charge:", config);
+                                battery_info_output_double_percent(info.charge, "charge", config);
                                 break;
                         }
                         case 't': {
-                                battery_info_output_double_percent(info.max_charge, "max_charge:", config);
+                                battery_info_output_double_percent(info.max_charge, "max_charge", config);
                                 break;
                         }
                         case 'v': {
-                                battery_info_output_double(info.voltage, "voltage:", config);
+                                battery_info_output_double(info.voltage, "voltage", config);
                                 break;
                         }
                         case 'C': {
-                                battery_info_output_double(info.current, "current:", config);
+                                battery_info_output_double(info.current, "current", config);
                                 break;
                         }
                         case 'T': {
-                                battery_info_output_double(info.temperature, "temperature:", config);
+                                battery_info_output_double(info.temperature, "temperature", config);
                                 break;
                         }
                         case 'D': {
-                                battery_info_output_double(info.etd, "etd:", config);
+                                battery_info_output_double(info.etd, "etd", config);
                                 break;
                         }
                         case 'd': {
-                                battery_info_output_str(info.driver, "driver:", config);
+                                battery_info_output_str(info.driver, "driver", config);
                                 break;
                         }
                         case 'm': {
-                                battery_info_output_str(info.model, "model:", config);
+                                battery_info_output_str(info.model, "model", config);
                                 break;
                         }
                         case 'M': {
-                                battery_info_output_str(info.manufacturer, "manufacturer:", config);
+                                battery_info_output_str(info.manufacturer, "manufacturer", config);
                                 break;
                         }
                         case 'e': {
-                                battery_info_output_str(info.technology, "technology:", config);
+                                battery_info_output_str(info.technology, "technology", config);
                                 break;
                         }
                         case 's': {
-                                battery_info_output_str(info.status, "status:", config);
+                                battery_info_output_str(info.status, "status", config);
                                 break;
                         }
                         case 'h': {
-                                battery_info_output_str(info.health, "health:", config);
+                                battery_info_output_str(info.health, "health", config);
+                                break;
+                        }
+                        case 'S': {
+                                battery_info_output_str(info.serial_number, "serial_number", config);
                                 break;
                         }
                         case 'H': {
-                                battery_info_output_str(info.charge_type, "charge_type:", config);
+                                battery_info_output_str(info.charge_type, "charge_type", config);
                                 break;
                         }
                         case 'r': {
-                                battery_info_output_str(info.charge_rate, "charge_rate:", config);
+                                battery_info_output_str(info.charge_rate, "charge_rate", config);
                                 break;
                         }
                         case 'p': {
-                                battery_info_output_flag(info.present, "present:", config);
+                                battery_info_output_flag(info.present, "present", config);
                                 break;
                         }
                         case 'o': {
-                                battery_info_output_flag(info.online, "online:", config);
+                                battery_info_output_flag(info.online, "online", config);
                                 break;
                         }
                         case 'g': {
-                                battery_info_output_flag(info.charging_enabled, "charging_enabled:", config);
+                                battery_info_output_flag(info.charging_enabled, "charging_enabled", config);
                                 break;
                         }
                         default: break;
@@ -1093,6 +1122,7 @@ main(int argc,
                                         case 'e':
                                         case 's':
                                         case 'h':
+                                        case 'S':
                                         case 'H':
                                         case 'r':
                                         case 'p':

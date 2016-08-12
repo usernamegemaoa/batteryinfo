@@ -11,7 +11,7 @@ And then to install (both the executable and the manpage):
 ```sh
 $ make install
 ```
-Or:
+Or, if superuser priviledges are required:
 ```sh
 $ sudo make install
 ```
@@ -46,24 +46,25 @@ $ ./batteryinfo -aj
 "batteries": [
         {
                 "battery": 0,
-                "name:": "BAT1",
-                "charge:": 89.70,
-                "max_charge:": 85.32,
-                "voltage:": 12.25,
-                "current:": 7.62,
-                "temperature:": null,
-                "driver:": "battery",
-                "model:": null,
-                "manufacturer:": "SANYO",
-                "technology:": "Li-ion",
-                "status:": "Discharging",
-                "health:": null,
-                "charge_type:": null,
-                "charge_rate:": null,
-                "present:": true,
-                "online:": null,
-                "charging_enabled:": null,
-                "etd:": 5.81
+                "name": "BAT1",
+                "charge": 92.98,
+                "max_charge": 85.32,
+                "voltage": 12.54,
+                "current": 5.72,
+                "temperature": null,
+                "driver": "battery",
+                "model": null,
+                "manufacturer": "SANYO",
+                "technology": "Li-ion",
+                "status": "Discharging",
+                "health": null,
+                "serial_number": "0000",
+                "charge_type": null,
+                "charge_rate": null,
+                "present": true,
+                "online": null,
+                "charging_enabled": null,
+                "etd": 5.28
         },
 ]
 }
